@@ -188,7 +188,8 @@ export default function CategoryPage() {
 
       {/* TABLE */}
       <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="w-full overflow-x-auto">
+        {/* <div className="w-full overflow-x-auto"> */}
+        <div className="hide-table-scrollbar w-full overflow-x-auto">
           <table className="w-full min-w-[560px] border-collapse">
             <thead>
               <tr className="bg-slate-50">

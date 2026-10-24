@@ -13,6 +13,7 @@ dotenv.config();
 const pool =
   require("./src/config/db");
 
+  
 const authRoutes =
   require("./src/routes/authRoutes");
   const categoryRoutes = require("./src/routes/categoryRoutes");
@@ -35,6 +36,10 @@ const paymentRoutes =
 
   const settingsRoutes =
   require("./src/routes/settingsRoutes");
+
+  
+const storeRoutes = require("./src/routes/storeRoutes");
+
 
 const {
   notFound,
@@ -185,6 +190,9 @@ app.use(
   "/api/settings",
   settingsRoutes
 );
+
+
+app.use("/api/store", storeRoutes);
 
 /* =========================================
    404 + ERROR

@@ -27,3 +27,18 @@ select {
 button {
   cursor: pointer;
 }
+
+
+
+/* Hide table scrollbar but allow horizontal swipe */
+
+.hide-table-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hide-table-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

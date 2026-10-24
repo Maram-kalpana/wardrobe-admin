@@ -6,12 +6,63 @@ import {
   X,
 } from "lucide-react";
 
+import { useEffect, useState } from "react";
+import { getStoreInformationApi } from "../api/settingsApi";
+
+
 export default function Sidebar({
   activePage,
   setActivePage,
   sidebarOpen,
   setSidebarOpen,
 }) {
+
+  
+  const [storeLogo, setStoreLogo] = useState("/vaibhavi.png");
+  const [storeName, setStoreName] = useState("Wardrobe");
+
+  useEffect(() => {
+    let active = true;
+
+    const loadStoreLogo = async () => {
+      try {
+        const response = await getStoreInformationApi();
+        const store = response?.data;
+
+        if (!active) return;
+
+        if (store?.store_name) {
+          setStoreName(store.store_name);
+        }
+
+        if (store?.store_logo) {
+          const path = store.store_logo;
+
+          const apiBase =
+            import.meta.env.VITE_API_BASE_URL ||
+            "http://localhost:5000/api";
+
+          const origin = apiBase.replace(/\/api\/?$/, "");
+
+          const logoUrl = /^https?:\/\//i.test(path)
+            ? path
+            : `${origin.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+
+          setStoreLogo(logoUrl);
+        }
+      } catch (error) {
+        console.error("Store logo fetch error:", error);
+      }
+    };
+
+    loadStoreLogo();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+
   const openPage = (page) => {
     setActivePage(page);
     setSidebarOpen(false);
@@ -49,11 +100,20 @@ export default function Sidebar({
         {/* LOGO AREA */}
         <div className="flex h-[72px] items-center justify-between border-b border-slate-200 px-5">
           <div className="flex items-center gap-3">
-            <img
+            {/* <img
               src="/vaibhavi.png"
               alt="Wardrobe"
               className="h-[68px] w-auto max-w-[230px] object-contain"
-            />
+            /> */}
+            <img
+  src={storeLogo}
+  alt={storeName}
+  className="h-[68px] w-auto max-w-[230px] object-contain"
+  onError={(event) => {
+    event.currentTarget.onerror = null;
+    event.currentTarget.src = "/vaibhavi.png";
+  }}
+/>
           </div>
 
           {/* MOBILE CLOSE */}

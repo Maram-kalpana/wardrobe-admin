@@ -4,7 +4,6 @@ COLLATE utf8mb4_unicode_ci;
 
 USE biryani_db;
 
-
 /* =========================================
    ADMINS
 ========================================= */
@@ -305,3 +304,27 @@ AFTER `courier_id`,
 ADD COLUMN `estimated_delivery_date`
 DATE DEFAULT NULL
 AFTER `tracking_url`;
+
+
+
+-- new tables
+
+ALTER TABLE product_sizes
+ADD COLUMN quantity INT NOT NULL DEFAULT 0;
+
+
+CREATE TABLE IF NOT EXISTS store_information (
+  id INT PRIMARY KEY,
+  store_name VARCHAR(200),
+  store_logo VARCHAR(500),
+  mobile_number VARCHAR(20),
+  whatsapp_number VARCHAR(20),
+  email VARCHAR(200),
+  store_address TEXT,
+  city VARCHAR(100),
+  state VARCHAR(100),
+  country VARCHAR(100),
+  postal_code VARCHAR(20),
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP
+);

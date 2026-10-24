@@ -10,6 +10,7 @@ export const getSettingsApi =
     return response.data;
   };
 
+
 export const saveRazorpayApi =
   async (payload) => {
     const response =
@@ -51,3 +52,26 @@ export const testShiprocketApi =
 
     return response.data;
   };
+
+
+  
+export const getStoreInformationApi = async () => {
+  const response = await axiosClient.get("/store");
+  return response.data;
+};
+
+
+export const saveStoreInformationApi = async (formData) => {
+  const response = await axiosClient.put(
+    "/store",
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    }
+  );
+
+  return response.data;
+};
+

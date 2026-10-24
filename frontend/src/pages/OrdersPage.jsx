@@ -256,7 +256,8 @@ export default function OrdersPage() {
 
       {/* ORDERS TABLE */}
       <div className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-2xl">
-        <div className="w-full max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+        {/* <div className="w-full max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]"> */}
+          <div className="hide-table-scrollbar w-full max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]">
           <table className="w-full min-w-[1400px] border-collapse">
             <thead>
               <tr className="bg-slate-50">

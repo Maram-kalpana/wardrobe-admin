@@ -331,15 +331,21 @@ exports.createPaymentOrder =
             ci.total_amount,
 
             mi.name AS current_item_name,
-            mi.portion_type AS current_portion_type,
-            mi.amount AS current_amount,
-            mi.is_active
+mi.is_active,
+ps.id AS variant_id,
+ps.size AS current_portion_type,
+ps.price AS current_amount,
+ps.quantity AS available_quantity
+          
 
           FROM cart_items ci
 
           INNER JOIN menu_items mi
             ON mi.id =
                ci.menu_item_id
+          INNER JOIN product_sizes ps
+  ON ps.product_id = ci.menu_item_id
+ AND ps.size = ci.portion_type
 
           WHERE ci.cart_id = ?
 
@@ -401,20 +407,43 @@ exports.createPaymentOrder =
       }
 
 
-      const quantity =
-        Math.max(
-          1,
-          Number(
-            item.quantity || 1
-          )
-        );
+      // const quantity =
+      //   Math.max(
+      //     1,
+      //     Number(
+      //       item.quantity || 1
+      //     )
+      //   );
 
 
-      const unitAmount =
-        Number(
-          item.current_amount ||
-          0
-        );
+      // const unitAmount =
+      //   Number(
+      //     item.current_amount ||
+      //     0
+      //   );
+      const quantity = Number(item.quantity);
+
+if (!Number.isInteger(quantity) || quantity <= 0) {
+  await connection.rollback();
+
+  return res.status(400).json({
+    success: false,
+    message: "Invalid item quantity.",
+  });
+}
+
+const availableQuantity = Number(item.available_quantity);
+
+if (availableQuantity <= 0 || quantity > availableQuantity) {
+  await connection.rollback();
+
+  return res.status(409).json({
+    success: false,
+    message: `${item.current_item_name} (${item.current_portion_type}) has only ${availableQuantity} item(s) available.`,
+  });
+}
+
+const unitAmount = Number(item.current_amount || 0);
 
 
       const itemTotal =
@@ -452,11 +481,19 @@ exports.createPaymentOrder =
     }
 
 
-    finalTotal =
-      Number(
-        finalTotal
-          .toFixed(2)
-      );
+    // finalTotal =
+    //   Number(
+    //     finalTotal
+    //       .toFixed(2)
+    //   );
+    const subtotal = Number(finalTotal.toFixed(2));
+
+const deliveryCharge =
+  subtotal >= 1000 ? 0 : 100;
+
+finalTotal = Number(
+  (subtotal + deliveryCharge).toFixed(2)
+);
 
 
     if (
@@ -646,6 +683,7 @@ exports.createPaymentOrder =
     );
 
 
+    
     await connection
       .commit();
 
@@ -1181,6 +1219,18 @@ exports.verifyPayment =
         });
     }
 
+    /* -----------------------------------------------------
+   VERIFY PAYMENT IS CAPTURED
+----------------------------------------------------- */
+
+if (payment.status !== "captured") {
+  await connection.rollback();
+
+  return res.status(400).json({
+    success: false,
+    message: "Payment has not been captured yet.",
+  });
+}
 
     /* -----------------------------------------------------
        UPDATE ORDER AS PAID
@@ -1271,6 +1321,49 @@ exports.verifyPayment =
         ]
       );
 
+
+/* -----------------------------------------------------
+   DECREASE STOCK AFTER PAYMENT VALIDATION
+----------------------------------------------------- */
+
+const purchasedItems = await query(
+  connection,
+  `
+    SELECT menu_item_id, portion_type, quantity
+    FROM order_items
+    WHERE order_id = ?
+    ORDER BY menu_item_id, portion_type
+  `,
+  [internalOrderId]
+);
+
+for (const item of purchasedItems) {
+  const stockUpdate = await query(
+    connection,
+    `
+      UPDATE product_sizes
+      SET quantity = quantity - ?
+      WHERE product_id = ?
+        AND size = ?
+        AND quantity >= ?
+    `,
+    [
+      Number(item.quantity),
+      item.menu_item_id,
+      item.portion_type,
+      Number(item.quantity),
+    ]
+  );
+
+  // mysql2 UPDATE result header
+  if (stockUpdate.affectedRows !== 1) {
+    const error = new Error(
+      `Stock is no longer available for size ${item.portion_type}.`
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+}
 
     await connection
       .commit();
@@ -1400,19 +1493,79 @@ exports.verifyPayment =
 
 
 
+
+
+
+
+
+
+
+
+
+
+
 // const crypto = require("crypto");
 // const Razorpay = require("razorpay");
 // const db = require("../config/db");
 
+// const {
+//   getRazorpaySettings,
+// } = require("../services/integrationService");
+
 
 // /* =========================================================
-//    RAZORPAY INSTANCE
+//    GET RAZORPAY CLIENT FROM ADMIN SETTINGS / DATABASE
 // ========================================================= */
 
-// const razorpay = new Razorpay({
-//   key_id: process.env.RAZORPAY_KEY_ID,
-//   key_secret: process.env.RAZORPAY_KEY_SECRET,
-// });
+// const getRazorpayClient = async () => {
+//   const settings =
+//     await getRazorpaySettings();
+
+//   if (
+//     !settings ||
+//     !settings.enabled
+//   ) {
+//     const error =
+//       new Error(
+//         "Razorpay payment gateway is currently disabled."
+//       );
+
+//     error.statusCode = 503;
+
+//     throw error;
+//   }
+
+//   if (
+//     !settings.keyId ||
+//     !settings.keySecret
+//   ) {
+//     const error =
+//       new Error(
+//         "Razorpay is enabled but credentials are incomplete."
+//       );
+
+//     error.statusCode = 503;
+
+//     throw error;
+//   }
+
+//   return {
+//     razorpay:
+//       new Razorpay({
+//         key_id:
+//           settings.keyId,
+
+//         key_secret:
+//           settings.keySecret,
+//       }),
+
+//     keyId:
+//       settings.keyId,
+
+//     keySecret:
+//       settings.keySecret,
+//   };
+// };
 
 
 // /* =========================================================
@@ -1421,46 +1574,55 @@ exports.verifyPayment =
 //    Supports mysql2/promise style connection/query.
 // ========================================================= */
 
-// const query = async (connection, sql, params = []) => {
-//   const [rows] = await connection.query(sql, params);
+// const query = async (
+//   connection,
+//   sql,
+//   params = []
+// ) => {
+//   const [rows] =
+//     await connection.query(
+//       sql,
+//       params
+//     );
+
 //   return rows;
 // };
 
 
 // /* =========================================================
 //    CREATE RAZORPAY ORDER
-
-//    POST /api/payments/create-order
-
-//    Expected body:
-
-//    {
-//      "cart_id": 1,
-//      "customer_name": "Akhila",
-//      "mobile": "9876543210"
-//    }
-
 // ========================================================= */
 
-// exports.createPaymentOrder = async (req, res) => {
+// exports.createPaymentOrder =
+//   async (req, res) => {
+
 //   let connection;
 
 //   try {
+
 //     const {
 //       cart_id,
 //       cartId,
+
 //       customer_name,
 //       customerName,
 //       name,
+
 //       mobile,
 //       mobile_number,
+
 //       address,
 //       delivery_address,
 //       deliveryAddress,
 //     } = req.body;
 
+
 //     const finalCartId =
-//       Number(cart_id || cartId);
+//       Number(
+//         cart_id ||
+//         cartId
+//       );
+
 
 //     const finalCustomerName =
 //       String(
@@ -1470,14 +1632,22 @@ exports.verifyPayment =
 //         ""
 //       ).trim();
 
+
 //     const finalMobile =
 //       String(
 //         mobile ||
 //         mobile_number ||
 //         ""
 //       ).trim();
-//       const finalAddress =
-//       String(address || delivery_address || deliveryAddress || "").trim();
+
+
+//     const finalAddress =
+//       String(
+//         address ||
+//         delivery_address ||
+//         deliveryAddress ||
+//         ""
+//       ).trim();
 
 
 //     /* -----------------------------------------------------
@@ -1485,94 +1655,162 @@ exports.verifyPayment =
 //     ----------------------------------------------------- */
 
 //     if (
-//       !Number.isInteger(finalCartId) ||
+//       !Number.isInteger(
+//         finalCartId
+//       ) ||
 //       finalCartId <= 0
 //     ) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Valid cart id is required.",
-//       });
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Valid cart id is required.",
+//         });
 //     }
 
 
 //     if (!finalCustomerName) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Customer name is required.",
-//       });
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Customer name is required.",
+//         });
 //     }
 
 
-//     if (!/^[6-9]\d{9}$/.test(finalMobile)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Enter a valid 10 digit mobile number.",
-//       });
+//     if (
+//       !/^[6-9]\d{9}$/.test(
+//         finalMobile
+//       )
+//     ) {
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Enter a valid 10 digit mobile number.",
+//         });
 //     }
+
+
 //     if (!finalAddress) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Delivery address is required.",
-//       });
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Delivery address is required.",
+//         });
 //     }
 
-//     if (finalAddress.length > 500) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Address is too long (max 500 characters).",
-//       });
+
+//     if (
+//       finalAddress.length >
+//       500
+//     ) {
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Address is too long (max 500 characters).",
+//         });
 //     }
+
+
+//     /* -----------------------------------------------------
+//        GET RAZORPAY FROM ADMIN SETTINGS / DATABASE
+//     ----------------------------------------------------- */
+
+//     const {
+//       razorpay,
+//       keyId,
+//     } =
+//       await getRazorpayClient();
 
 
 //     /* -----------------------------------------------------
 //        GET DATABASE CONNECTION
 //     ----------------------------------------------------- */
 
-//     connection = await db.getConnection();
+//     connection =
+//       await db.getConnection();
 
-//     await connection.beginTransaction();
+//     await connection
+//       .beginTransaction();
 
 
 //     /* -----------------------------------------------------
 //        GET ACTIVE CART
 //     ----------------------------------------------------- */
 
-//     const carts = await query(
-//       connection,
-//       `
-//         SELECT
-//           id,
-//           status,
-//           total_amount
-//         FROM carts
-//         WHERE id = ?
-//         LIMIT 1
-//         FOR UPDATE
-//       `,
-//       [finalCartId]
-//     );
+//     const carts =
+//       await query(
+//         connection,
+
+//         `
+//           SELECT
+//             id,
+//             status,
+//             total_amount
+
+//           FROM carts
+
+//           WHERE id = ?
+
+//           LIMIT 1
+
+//           FOR UPDATE
+//         `,
+
+//         [finalCartId]
+//       );
 
 
 //     if (!carts.length) {
-//       await connection.rollback();
 
-//       return res.status(404).json({
-//         success: false,
-//         message: "Cart not found.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(404)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Cart not found.",
+//         });
 //     }
 
 
-//     const cart = carts[0];
+//     const cart =
+//       carts[0];
 
 
-//     if (cart.status !== "active") {
-//       await connection.rollback();
+//     if (
+//       cart.status !==
+//       "active"
+//     ) {
 
-//       return res.status(400).json({
-//         success: false,
-//         message: "This cart is no longer active.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "This cart is no longer active.",
+//         });
 //     }
 
 
@@ -1584,43 +1822,53 @@ exports.verifyPayment =
 //        NOT portion.
 //     ----------------------------------------------------- */
 
-//     const cartItems = await query(
-//       connection,
-//       `
-//         SELECT
-//           ci.id,
-//           ci.menu_item_id,
-//           ci.item_name,
-//           ci.portion_type,
-//           ci.quantity,
-//           ci.unit_amount,
-//           ci.total_amount,
+//     const cartItems =
+//       await query(
+//         connection,
 
-//           mi.name AS current_item_name,
-//           mi.portion_type AS current_portion_type,
-//           mi.amount AS current_amount,
-//           mi.is_active
+//         `
+//           SELECT
+//             ci.id,
+//             ci.menu_item_id,
+//             ci.item_name,
+//             ci.portion_type,
+//             ci.quantity,
+//             ci.unit_amount,
+//             ci.total_amount,
 
-//         FROM cart_items ci
+//             mi.name AS current_item_name,
+//             mi.portion_type AS current_portion_type,
+//             mi.amount AS current_amount,
+//             mi.is_active
 
-//         INNER JOIN menu_items mi
-//           ON mi.id = ci.menu_item_id
+//           FROM cart_items ci
 
-//         WHERE ci.cart_id = ?
+//           INNER JOIN menu_items mi
+//             ON mi.id =
+//                ci.menu_item_id
 
-//         ORDER BY ci.id ASC
-//       `,
-//       [finalCartId]
-//     );
+//           WHERE ci.cart_id = ?
+
+//           ORDER BY ci.id ASC
+//         `,
+
+//         [finalCartId]
+//       );
 
 
 //     if (!cartItems.length) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message: "Your cart is empty.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Your cart is empty.",
+//         });
 //     }
 
 
@@ -1635,26 +1883,44 @@ exports.verifyPayment =
 //     const verifiedItems = [];
 
 
-//     for (const item of cartItems) {
-//       if (Number(item.is_active) !== 1) {
-//         await connection.rollback();
+//     for (
+//       const item of cartItems
+//     ) {
 
-//         return res.status(400).json({
-//           success: false,
-//           message: `${item.current_item_name} is currently unavailable.`,
-//         });
+//       if (
+//         Number(
+//           item.is_active
+//         ) !== 1
+//       ) {
+
+//         await connection
+//           .rollback();
+
+//         return res
+//           .status(400)
+//           .json({
+//             success: false,
+
+//             message:
+//               `${item.current_item_name} is currently unavailable.`,
+//           });
 //       }
 
 
 //       const quantity =
 //         Math.max(
 //           1,
-//           Number(item.quantity || 1)
+//           Number(
+//             item.quantity || 1
+//           )
 //         );
 
 
 //       const unitAmount =
-//         Number(item.current_amount || 0);
+//         Number(
+//           item.current_amount ||
+//           0
+//         );
 
 
 //       const itemTotal =
@@ -1666,10 +1932,12 @@ exports.verifyPayment =
 //         );
 
 
-//       finalTotal += itemTotal;
+//       finalTotal +=
+//         itemTotal;
 
 
 //       verifiedItems.push({
+
 //         menu_item_id:
 //           item.menu_item_id,
 
@@ -1691,19 +1959,30 @@ exports.verifyPayment =
 
 
 //     finalTotal =
-//       Number(finalTotal.toFixed(2));
+//       Number(
+//         finalTotal
+//           .toFixed(2)
+//       );
 
 
 //     if (
-//       !Number.isFinite(finalTotal) ||
+//       !Number.isFinite(
+//         finalTotal
+//       ) ||
 //       finalTotal <= 0
 //     ) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message: "Invalid cart total.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+//           success: false,
+
+//           message:
+//             "Invalid cart total.",
+//         });
 //     }
 
 
@@ -1713,11 +1992,15 @@ exports.verifyPayment =
 
 //     await query(
 //       connection,
+
 //       `
 //         UPDATE carts
+
 //         SET total_amount = ?
+
 //         WHERE id = ?
 //       `,
+
 //       [
 //         finalTotal,
 //         finalCartId,
@@ -1729,29 +2012,33 @@ exports.verifyPayment =
 //        CREATE INTERNAL ORDER
 //     ----------------------------------------------------- */
 
-//     const orderResult = await query(
-//       connection,
-//       `
-//                INSERT INTO orders
-//         (
-//           customer_name,
-//           mobile,
-//           address,
-//           total_amount,
-//           payment_method,
-//           payment_status
-//         )
-//         VALUES (?, ?, ?, ?, ?, ?)
-//       `,
-//       [
-//         finalCustomerName,
-//         finalMobile,
-//         finalAddress,
-//         finalTotal,
-//         "Razorpay",
-//         "pending",
-//       ]
-//     );
+//     const orderResult =
+//       await query(
+//         connection,
+
+//         `
+//           INSERT INTO orders
+//           (
+//             customer_name,
+//             mobile,
+//             address,
+//             total_amount,
+//             payment_method,
+//             payment_status
+//           )
+
+//           VALUES (?, ?, ?, ?, ?, ?)
+//         `,
+
+//         [
+//           finalCustomerName,
+//           finalMobile,
+//           finalAddress,
+//           finalTotal,
+//           "Razorpay",
+//           "pending",
+//         ]
+//       );
 
 
 //     const orderId =
@@ -1762,9 +2049,14 @@ exports.verifyPayment =
 //        SAVE ORDER ITEMS
 //     ----------------------------------------------------- */
 
-//     for (const item of verifiedItems) {
+//     for (
+//       const item of
+//       verifiedItems
+//     ) {
+
 //       await query(
 //         connection,
+
 //         `
 //           INSERT INTO order_items
 //           (
@@ -1776,8 +2068,10 @@ exports.verifyPayment =
 //             unit_amount,
 //             total_amount
 //           )
+
 //           VALUES (?, ?, ?, ?, ?, ?, ?)
 //         `,
+
 //         [
 //           orderId,
 //           item.menu_item_id,
@@ -1799,31 +2093,41 @@ exports.verifyPayment =
 //     ----------------------------------------------------- */
 
 //     const razorpayOrder =
-//       await razorpay.orders.create({
-//         amount:
-//           Math.round(
-//             finalTotal * 100
-//           ),
+//       await razorpay
+//         .orders
+//         .create({
 
-//         currency: "INR",
+//           amount:
+//             Math.round(
+//               finalTotal *
+//               100
+//             ),
 
-//         receipt:
-//           `order_${orderId}`,
+//           currency:
+//             "INR",
 
-//         notes: {
-//           internal_order_id:
-//             String(orderId),
+//           receipt:
+//             `order_${orderId}`,
 
-//           cart_id:
-//             String(finalCartId),
+//           notes: {
 
-//           customer_name:
-//             finalCustomerName,
+//             internal_order_id:
+//               String(
+//                 orderId
+//               ),
 
-//           mobile:
-//             finalMobile,
-//         },
-//       });
+//             cart_id:
+//               String(
+//                 finalCartId
+//               ),
+
+//             customer_name:
+//               finalCustomerName,
+
+//             mobile:
+//               finalMobile,
+//           },
+//         });
 
 
 //     /* -----------------------------------------------------
@@ -1832,11 +2136,15 @@ exports.verifyPayment =
 
 //     await query(
 //       connection,
+
 //       `
 //         UPDATE orders
+
 //         SET razorpay_order_id = ?
+
 //         WHERE id = ?
 //       `,
+
 //       [
 //         razorpayOrder.id,
 //         orderId,
@@ -1844,53 +2152,66 @@ exports.verifyPayment =
 //     );
 
 
-//     await connection.commit();
+//     await connection
+//       .commit();
 
 
 //     /* -----------------------------------------------------
 //        RESPONSE TO FRONTEND
 //     ----------------------------------------------------- */
 
-//     return res.status(200).json({
-//       success: true,
+//     return res
+//       .status(200)
+//       .json({
 
-//       message:
-//         "Payment order created successfully.",
+//         success: true,
 
-//       data: {
-//         order_id:
-//           orderId,
+//         message:
+//           "Payment order created successfully.",
 
-//         cart_id:
-//           finalCartId,
+//         data: {
 
-//         razorpay_order_id:
-//           razorpayOrder.id,
+//           order_id:
+//             orderId,
 
-//         key_id:
-//           process.env.RAZORPAY_KEY_ID,
+//           cart_id:
+//             finalCartId,
 
-//         amount:
-//           razorpayOrder.amount,
+//           razorpay_order_id:
+//             razorpayOrder.id,
 
-//         amount_in_rupees:
-//           finalTotal,
+//           /*
+//            * Public Razorpay Key ID
+//            * from Admin Settings DB.
+//            *
+//            * Secret is NEVER returned.
+//            */
+//           key_id:
+//             keyId,
 
-//         currency:
-//           razorpayOrder.currency,
+//           amount:
+//             razorpayOrder.amount,
 
-//         customer_name:
-//           finalCustomerName,
+//           amount_in_rupees:
+//             finalTotal,
 
-//         mobile:
-//           finalMobile,
+//           currency:
+//             razorpayOrder.currency,
 
-//         items:
-//           verifiedItems,
-//       },
-//     });
+//           customer_name:
+//             finalCustomerName,
+
+//           mobile:
+//             finalMobile,
+
+//           items:
+//             verifiedItems,
+//         },
+//       });
+
 
 //   } catch (error) {
+
 //     console.error(
 //       "CREATE PAYMENT ORDER ERROR:",
 //       error
@@ -1898,9 +2219,16 @@ exports.verifyPayment =
 
 
 //     if (connection) {
+
 //       try {
-//         await connection.rollback();
-//       } catch (rollbackError) {
+
+//         await connection
+//           .rollback();
+
+//       } catch (
+//         rollbackError
+//       ) {
+
 //         console.error(
 //           "ROLLBACK ERROR:",
 //           rollbackError
@@ -1909,17 +2237,27 @@ exports.verifyPayment =
 //     }
 
 
-//     return res.status(500).json({
-//       success: false,
+//     return res
+//       .status(
+//         error?.statusCode ||
+//         500
+//       )
+//       .json({
 
-//       message:
-//         error?.message ||
-//         "Unable to create payment order.",
-//     });
+//         success: false,
+
+//         message:
+//           error?.message ||
+//           "Unable to create payment order.",
+//       });
+
 
 //   } finally {
+
 //     if (connection) {
+
 //       connection.release();
+
 //     }
 //   }
 // };
@@ -1939,13 +2277,16 @@ exports.verifyPayment =
 //      "razorpay_payment_id": "...",
 //      "razorpay_signature": "..."
 //    }
-
 // ========================================================= */
 
-// exports.verifyPayment = async (req, res) => {
+// exports.verifyPayment =
+//   async (req, res) => {
+
 //   let connection;
 
+
 //   try {
+
 //     const {
 //       order_id,
 //       orderId,
@@ -2003,11 +2344,16 @@ exports.verifyPayment =
 //       ) ||
 //       internalOrderId <= 0
 //     ) {
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Valid order id is required.",
-//       });
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Valid order id is required.",
+//         });
 //     }
 
 
@@ -2016,12 +2362,28 @@ exports.verifyPayment =
 //       !finalRazorpayPaymentId ||
 //       !finalSignature
 //     ) {
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Payment verification details are missing.",
-//       });
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Payment verification details are missing.",
+//         });
 //     }
+
+
+//     /* -----------------------------------------------------
+//        GET RAZORPAY FROM ADMIN SETTINGS / DATABASE
+//     ----------------------------------------------------- */
+
+//     const {
+//       razorpay,
+//       keySecret,
+//     } =
+//       await getRazorpayClient();
 
 
 //     /* -----------------------------------------------------
@@ -2032,8 +2394,7 @@ exports.verifyPayment =
 //       crypto
 //         .createHmac(
 //           "sha256",
-//           process.env
-//             .RAZORPAY_KEY_SECRET
+//           keySecret
 //         )
 //         .update(
 //           `${finalRazorpayOrderId}|${finalRazorpayPaymentId}`
@@ -2043,7 +2404,9 @@ exports.verifyPayment =
 
 //     const signatureBuffer =
 //       Buffer.from(
-//         String(finalSignature)
+//         String(
+//           finalSignature
+//         )
 //       );
 
 
@@ -2058,6 +2421,7 @@ exports.verifyPayment =
 //     const isValid =
 //       signatureBuffer.length ===
 //         generatedBuffer.length &&
+
 //       crypto.timingSafeEqual(
 //         signatureBuffer,
 //         generatedBuffer
@@ -2065,11 +2429,16 @@ exports.verifyPayment =
 
 
 //     if (!isValid) {
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Payment signature verification failed.",
-//       });
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Payment signature verification failed.",
+//         });
 //     }
 
 
@@ -2080,47 +2449,60 @@ exports.verifyPayment =
 //     connection =
 //       await db.getConnection();
 
-//     await connection.beginTransaction();
+
+//     await connection
+//       .beginTransaction();
 
 
 //     /* -----------------------------------------------------
 //        GET INTERNAL ORDER
 //     ----------------------------------------------------- */
 
-//     const orders = await query(
-//       connection,
-//       `
-//         SELECT
-//           id,
-//           customer_name,
-//           mobile,
-//           total_amount,
-//           payment_method,
-//           payment_status,
-//           razorpay_order_id,
-//           razorpay_payment_id,
-//           created_at
+//     const orders =
+//       await query(
+//         connection,
 
-//         FROM orders
+//         `
+//           SELECT
+//             id,
+//             customer_name,
+//             mobile,
+//             total_amount,
+//             payment_method,
+//             payment_status,
+//             razorpay_order_id,
+//             razorpay_payment_id,
+//             created_at
 
-//         WHERE id = ?
+//           FROM orders
 
-//         LIMIT 1
+//           WHERE id = ?
 
-//         FOR UPDATE
-//       `,
-//       [internalOrderId]
-//     );
+//           LIMIT 1
+
+//           FOR UPDATE
+//         `,
+
+//         [
+//           internalOrderId
+//         ]
+//       );
 
 
 //     if (!orders.length) {
-//       await connection.rollback();
 
-//       return res.status(404).json({
-//         success: false,
-//         message:
-//           "Order not found.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(404)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Order not found.",
+//         });
 //     }
 
 
@@ -2140,13 +2522,19 @@ exports.verifyPayment =
 //         finalRazorpayOrderId
 //       )
 //     ) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Razorpay order does not match.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Razorpay order does not match.",
+//         });
 //     }
 
 
@@ -2160,83 +2548,109 @@ exports.verifyPayment =
 //     if (
 //       order.payment_status ===
 //         "paid" &&
+
 //       order.razorpay_payment_id
 //     ) {
-//       await connection.commit();
 
-//       return res.status(200).json({
-//         success: true,
+//       await connection
+//         .commit();
 
-//         message:
-//           "Payment already verified.",
 
-//         data: {
-//           order_id:
-//             order.id,
+//       return res
+//         .status(200)
+//         .json({
 
-//           customer_name:
-//             order.customer_name,
+//           success: true,
 
-//           mobile:
-//             order.mobile,
+//           message:
+//             "Payment already verified.",
 
-//           total_amount:
-//             Number(
-//               order.total_amount
-//             ),
+//           data: {
 
-//           payment_method:
-//             order.payment_method,
+//             order_id:
+//               order.id,
 
-//           payment_status:
-//             order.payment_status,
+//             customer_name:
+//               order.customer_name,
 
-//           razorpay_order_id:
-//             order.razorpay_order_id,
+//             mobile:
+//               order.mobile,
 
-//           razorpay_payment_id:
-//             order.razorpay_payment_id,
-//         },
-//       });
+//             total_amount:
+//               Number(
+//                 order.total_amount
+//               ),
+
+//             payment_method:
+//               order.payment_method,
+
+//             payment_status:
+//               order.payment_status,
+
+//             razorpay_order_id:
+//               order
+//                 .razorpay_order_id,
+
+//             razorpay_payment_id:
+//               order
+//                 .razorpay_payment_id,
+//           },
+//         });
 //     }
 
 
 //     /* -----------------------------------------------------
-//        OPTIONAL: FETCH PAYMENT FROM RAZORPAY
+//        FETCH PAYMENT FROM RAZORPAY
 
-//        This additionally confirms payment exists.
+//        Confirms that payment actually exists.
 //     ----------------------------------------------------- */
 
 //     const payment =
-//       await razorpay.payments.fetch(
-//         finalRazorpayPaymentId
-//       );
+//       await razorpay
+//         .payments
+//         .fetch(
+//           finalRazorpayPaymentId
+//         );
 
 
 //     if (!payment) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Unable to verify Razorpay payment.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Unable to verify Razorpay payment.",
+//         });
 //     }
 
 
 //     if (
-//       String(payment.order_id) !==
+//       String(
+//         payment.order_id
+//       ) !==
 //       String(
 //         finalRazorpayOrderId
 //       )
 //     ) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Razorpay payment order mismatch.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Razorpay payment order mismatch.",
+//         });
 //     }
 
 
@@ -2253,16 +2667,24 @@ exports.verifyPayment =
 
 
 //     if (
-//       Number(payment.amount) !==
+//       Number(
+//         payment.amount
+//       ) !==
 //       expectedAmount
 //     ) {
-//       await connection.rollback();
 
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "Payment amount mismatch.",
-//       });
+//       await connection
+//         .rollback();
+
+//       return res
+//         .status(400)
+//         .json({
+
+//           success: false,
+
+//           message:
+//             "Payment amount mismatch.",
+//         });
 //     }
 
 
@@ -2272,6 +2694,7 @@ exports.verifyPayment =
 
 //     await query(
 //       connection,
+
 //       `
 //         UPDATE orders
 
@@ -2282,6 +2705,7 @@ exports.verifyPayment =
 
 //         WHERE id = ?
 //       `,
+
 //       [
 //         "Razorpay",
 //         "paid",
@@ -2303,16 +2727,22 @@ exports.verifyPayment =
 //       ) &&
 //       finalCartId > 0
 //     ) {
+
 //       await query(
 //         connection,
+
 //         `
 //           UPDATE carts
 
-//           SET status = 'completed'
+//           SET status =
+//             'completed'
 
 //           WHERE id = ?
 //         `,
-//         [finalCartId]
+
+//         [
+//           finalCartId
+//         ]
 //       );
 //     }
 
@@ -2324,6 +2754,7 @@ exports.verifyPayment =
 //     const orderItems =
 //       await query(
 //         connection,
+
 //         `
 //           SELECT
 //             id,
@@ -2340,75 +2771,86 @@ exports.verifyPayment =
 
 //           ORDER BY id ASC
 //         `,
-//         [internalOrderId]
+
+//         [
+//           internalOrderId
+//         ]
 //       );
 
 
-//     await connection.commit();
+//     await connection
+//       .commit();
 
 
 //     /* -----------------------------------------------------
 //        SUCCESS RESPONSE
 //     ----------------------------------------------------- */
 
-//     return res.status(200).json({
-//       success: true,
+//     return res
+//       .status(200)
+//       .json({
 
-//       message:
-//         "Payment verified successfully.",
+//         success: true,
 
-//       data: {
-//         order_id:
-//           internalOrderId,
+//         message:
+//           "Payment verified successfully.",
 
-//         customer_name:
-//           order.customer_name,
+//         data: {
 
-//         mobile:
-//           order.mobile,
+//           order_id:
+//             internalOrderId,
 
-//         total_amount:
-//           Number(
-//             order.total_amount
-//           ),
+//           customer_name:
+//             order.customer_name,
 
-//         payment_method:
-//           "Razorpay",
+//           mobile:
+//             order.mobile,
 
-//         payment_status:
-//           "paid",
+//           total_amount:
+//             Number(
+//               order.total_amount
+//             ),
 
-//         razorpay_order_id:
-//           finalRazorpayOrderId,
+//           payment_method:
+//             "Razorpay",
 
-//         razorpay_payment_id:
-//           finalRazorpayPaymentId,
+//           payment_status:
+//             "paid",
 
-//         items:
-//           orderItems.map(
-//             (item) => ({
-//               ...item,
+//           razorpay_order_id:
+//             finalRazorpayOrderId,
 
-//               quantity:
-//                 Number(
-//                   item.quantity
-//                 ),
+//           razorpay_payment_id:
+//             finalRazorpayPaymentId,
 
-//               unit_amount:
-//                 Number(
-//                   item.unit_amount
-//                 ),
+//           items:
+//             orderItems.map(
+//               (item) => ({
 
-//               total_amount:
-//                 Number(
-//                   item.total_amount
-//                 ),
-//             })
-//           ),
-//       },
-//     });
+//                 ...item,
+
+//                 quantity:
+//                   Number(
+//                     item.quantity
+//                   ),
+
+//                 unit_amount:
+//                   Number(
+//                     item.unit_amount
+//                   ),
+
+//                 total_amount:
+//                   Number(
+//                     item.total_amount
+//                   ),
+//               })
+//             ),
+//         },
+//       });
+
 
 //   } catch (error) {
+
 //     console.error(
 //       "VERIFY PAYMENT ERROR:",
 //       error
@@ -2416,9 +2858,16 @@ exports.verifyPayment =
 
 
 //     if (connection) {
+
 //       try {
-//         await connection.rollback();
-//       } catch (rollbackError) {
+
+//         await connection
+//           .rollback();
+
+//       } catch (
+//         rollbackError
+//       ) {
+
 //         console.error(
 //           "VERIFY ROLLBACK ERROR:",
 //           rollbackError
@@ -2427,17 +2876,29 @@ exports.verifyPayment =
 //     }
 
 
-//     return res.status(500).json({
-//       success: false,
+//     return res
+//       .status(
+//         error?.statusCode ||
+//         500
+//       )
+//       .json({
 
-//       message:
-//         error?.message ||
-//         "Unable to verify payment.",
-//     });
+//         success: false,
+
+//         message:
+//           error?.message ||
+//           "Unable to verify payment.",
+//       });
+
 
 //   } finally {
+
 //     if (connection) {
+
 //       connection.release();
+
 //     }
 //   }
 // };
+
+
