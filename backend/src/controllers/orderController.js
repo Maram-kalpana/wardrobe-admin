@@ -33,6 +33,8 @@ exports.getOrders = async (req, res) => {
             o.address,
 
           o.total_amount AS order_total_amount,
+          o.coupon_code,
+          o.discount_amount,
 
           o.payment_method,
           o.payment_status,
@@ -54,7 +56,15 @@ exports.getOrders = async (req, res) => {
 
           oi.unit_amount,
 
-          oi.total_amount AS item_total_amount
+                           oi.total_amount AS item_total_amount,
+
+          (
+            SELECT pi.image_path
+            FROM product_images pi
+            WHERE pi.product_id = oi.menu_item_id
+            ORDER BY pi.sort_order ASC, pi.id ASC
+            LIMIT 1
+          ) AS item_image
 
         FROM orders o
 
@@ -76,8 +86,8 @@ exports.getOrders = async (req, res) => {
        Therefore flatten the order + item data.
     ----------------------------------------------------- */
 
-    const orders =
-      rows.map((row) => {
+        const orders =
+      rows.map((row, index) => {
 
         return {
 
@@ -131,6 +141,9 @@ exports.getOrders = async (req, res) => {
 
           item_name:
             row.item_name,
+                      image: row.item_image || "",
+          imageUrl: row.item_image || "",
+          image_url: row.item_image || "",
 
 
           /* ===============================================
@@ -211,6 +224,38 @@ exports.getOrders = async (req, res) => {
                   row.item_total_amount ||
                   0
                 ),
+                          /* ===============================================
+             AMOUNT ACTUALLY PAID BY CUSTOMER
+             (items + delivery - coupon)
+          =============================================== */
+
+          paidAmount:
+            Number(
+              row.order_total_amount ||
+              0
+            ),
+
+          paid_amount:
+            Number(
+              row.order_total_amount ||
+              0
+            ),
+
+          couponCode:
+            row.coupon_code || "",
+
+          discountAmount:
+            Number(
+              row.discount_amount ||
+              0
+            ),
+
+          /* Rows are flattened to one per item, so mark the first
+             row of each order to show the paid amount only once. */
+          isFirstItemOfOrder:
+            index === 0 ||
+            rows[index - 1].order_id !==
+              row.order_id,
           // totalAmount:
           //   Number(
           //     row.order_total_amount ||

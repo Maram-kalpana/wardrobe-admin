@@ -3,6 +3,7 @@ import {
   Package,
   Settings,
   Tags,
+  Ticket,
   X,
 } from "lucide-react";
 
@@ -145,6 +146,11 @@ export default function Sidebar({
             <ClipboardList size={19} />
             Orders
           </button>
+          {/* COUPONS */}
+<button type="button" onClick={() => openPage("coupons")} className={navClass("coupons")}>
+  <Ticket size={19} />
+  Coupons
+</button>
           <button
             type="button"
             onClick={() =>

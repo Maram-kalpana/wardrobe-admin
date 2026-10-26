@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 const db = require("../config/db");
+const { getCouponDiscount } = require("../utils/applyCoupon");
 
 const {
   getRazorpaySettings,
@@ -108,6 +109,7 @@ exports.createPaymentOrder =
       address,
       delivery_address,
       deliveryAddress,
+          coupon_code,
     } = req.body;
 
 
@@ -486,15 +488,33 @@ const unitAmount = Number(item.current_amount || 0);
     //     finalTotal
     //       .toFixed(2)
     //   );
-    const subtotal = Number(finalTotal.toFixed(2));
+ const subtotal = Number(finalTotal.toFixed(2));
 
 const deliveryCharge =
   subtotal >= 1000 ? 0 : 100;
 
-finalTotal = Number(
-  (subtotal + deliveryCharge).toFixed(2)
-);
+/* COUPON: always recalculated on the server */
+let discountAmount = 0;
+let appliedCouponCode = null;
 
+if (coupon_code) {
+  const couponResult = await getCouponDiscount(coupon_code, subtotal);
+
+  if (!couponResult.valid) {
+    await connection.rollback();
+    return res.status(400).json({
+      success: false,
+      message: couponResult.message,
+    });
+  }
+
+  discountAmount = couponResult.discount;
+  appliedCouponCode = couponResult.code;
+}
+
+finalTotal = Number(
+  (subtotal + deliveryCharge - discountAmount).toFixed(2)
+);
 
     if (
       !Number.isFinite(
@@ -548,17 +568,19 @@ finalTotal = Number(
         connection,
 
         `
-          INSERT INTO orders
+                    INSERT INTO orders
           (
             customer_name,
             mobile,
             address,
             total_amount,
             payment_method,
-            payment_status
+            payment_status,
+            coupon_code,
+            discount_amount
           )
 
-          VALUES (?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `,
 
         [
@@ -568,9 +590,10 @@ finalTotal = Number(
           finalTotal,
           "Razorpay",
           "pending",
+          appliedCouponCode,
+          discountAmount,
         ]
       );
-
 
     const orderId =
       orderResult.insertId;

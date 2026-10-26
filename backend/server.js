@@ -33,6 +33,7 @@ const paymentRoutes =
   require(
     "./src/routes/cartRoutes"
   );
+  const couponRoutes = require("./src/routes/couponRoutes");
 
   const settingsRoutes =
   require("./src/routes/settingsRoutes");
@@ -165,6 +166,7 @@ app.use(
 app.use("/api/categories", categoryRoutes);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/products", productRoutes);
+app.use("/api/coupons", couponRoutes);
 
 app.use(
   "/api/menu",

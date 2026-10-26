@@ -61,8 +61,17 @@ const buildRow = (order, item, rowKey, orderIndex) => ({
     item.product_name ||
     "-",
 
-  portion:
+    portion:
     item.portion || item.portionType || item.portion_type || item.size || "-",
+
+  image:
+    item.image ||
+    item.imageUrl ||
+    item.image_url ||
+    order.image ||
+    order.imageUrl ||
+    order.image_url ||
+    "",
 
   quantity: Number(item.quantity ?? item.qty ?? 0),
 
@@ -80,8 +89,16 @@ const buildRow = (order, item, rowKey, orderIndex) => ({
       order.total_amount ??
       order.total ??
       order.grandTotal ??
-      0
+           0
   ),
+
+  paidAmount: order.paidAmount ?? order.paid_amount ?? null,
+
+  couponCode: order.couponCode || order.coupon_code || "",
+
+  discountAmount: Number(order.discountAmount ?? order.discount_amount ?? 0),
+
+  isFirstItemOfOrder: order.isFirstItemOfOrder ?? true,
 
   createdAt: order.createdAt || order.created_at || null,
 });
@@ -258,7 +275,7 @@ export default function OrdersPage() {
       <div className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-2xl">
         {/* <div className="w-full max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]"> */}
           <div className="hide-table-scrollbar w-full max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-          <table className="w-full min-w-[1400px] border-collapse">
+          <table className="w-full min-w-[1560px] border-collapse">
             <thead>
               <tr className="bg-slate-50">
                 <th className="w-12 px-5 py-4">
@@ -281,7 +298,8 @@ export default function OrdersPage() {
                 <th className={`min-w-[180px] ${TH_CLASS}`}>Order Item</th>
                 <th className={`min-w-[120px] ${TH_CLASS}`}>Portion</th>
                 <th className={`min-w-[100px] text-center ${TH_CLASS}`}>Quantity</th>
-                <th className={`min-w-[130px] ${TH_CLASS}`}>Item Total</th>
+               <th className={`min-w-[130px] ${TH_CLASS}`}>Item Total</th>
+<th className={`min-w-[160px] ${TH_CLASS}`}>Amount Paid</th>
                 <th className={`min-w-[190px] ${TH_CLASS}`}>Order Date</th>
               </tr>
             </thead>
@@ -346,10 +364,27 @@ export default function OrdersPage() {
                         <span className="text-sm font-bold text-slate-800">{order.quantity}</span>
                       </td>
 
-                      <td className="whitespace-nowrap px-5 py-4">
+                                           <td className="whitespace-nowrap px-5 py-4">
                         <span className="text-sm font-black text-slate-900">
                           {formatAmount(order.totalAmount)}
                         </span>
+                      </td>
+
+                      <td className="whitespace-nowrap px-5 py-4">
+                        {order.isFirstItemOfOrder && order.paidAmount !== null ? (
+                          <div>
+                            <span className="text-sm font-black text-[#ee027e]">
+                              {formatAmount(order.paidAmount)}
+                            </span>
+                            {order.couponCode && (
+                              <p className="mt-0.5 text-[11px] font-semibold text-green-600">
+                                {order.couponCode} (-{formatAmount(order.discountAmount)})
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-slate-400">-</span>
+                        )}
                       </td>
 
                       <td className="whitespace-nowrap px-5 py-4">
